@@ -117,10 +117,12 @@ fun LauncherScreen(viewModel: LauncherViewModel = viewModel()) {
             .onSizeChanged { screenHeight = it.height.coerceAtLeast(1).toFloat() }
     ) {
         Column(Modifier.fillMaxSize()) {
+            // ── Workspace + RepoStrip: slide up 40px, fade out ──
             val slideUpOffset = -(drawerFraction * 40f).roundToInt()
             Box(
                 modifier = Modifier
-                    .fillMaxSize()
+                    .weight(1f)
+                    .fillMaxWidth()
                     .graphicsLayer { alpha = homeFade; translationY = slideUpOffset.toFloat() }
             ) {
                 if (!drawerOpen) {
@@ -149,19 +151,28 @@ fun LauncherScreen(viewModel: LauncherViewModel = viewModel()) {
                     ) {
                         Column(Modifier.fillMaxSize()) {
                             WorkspacePages(viewModel, Modifier.weight(1f))
-                            HotseatBar(viewModel, Modifier.fillMaxWidth(), settings)
                             RepoStrip(repos, viewModel, Modifier.fillMaxWidth())
                         }
                     }
                 } else {
-                    // Hide home screen scrub when drawer is open (still advance offset for smooth return)
                     if (displayOffset < maxOffset * 0.95f) {
                         Column(Modifier.fillMaxSize()) {
                             WorkspacePages(viewModel, Modifier.weight(1f))
-                            HotseatBar(viewModel, Modifier.fillMaxWidth(), settings)
                             RepoStrip(repos, viewModel, Modifier.fillMaxWidth())
                         }
                     }
+                }
+            }
+            // ── Dock: slides up 80px (more aggressively) and fades independently ──
+            val dockSlideUp = -(drawerFraction * 80f).roundToInt()
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .wrapContentHeight()
+                    .graphicsLayer { alpha = homeFade; translationY = dockSlideUp.toFloat() }
+            ) {
+                if (!drawerOpen || displayOffset < maxOffset * 0.95f) {
+                    HotseatBar(viewModel, Modifier.fillMaxWidth(), settings)
                 }
             }
         }
