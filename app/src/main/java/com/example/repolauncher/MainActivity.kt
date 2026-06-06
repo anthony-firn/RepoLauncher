@@ -82,6 +82,19 @@ fun RepoLauncherTheme(content: @Composable () -> Unit) {
 fun LauncherScreen(viewModel: LauncherViewModel = viewModel()) {
     val repos by viewModel.repos.collectAsStateWithLifecycle()
     val settings = viewModel.settings
+    val ctx = LocalContext.current
+
+    // Pre-compute icon pack overrides once when pack changes — avoids per-item XML parsing
+    val iconOverrides = remember(settings.iconPackPackage, viewModel.installedApps) {
+        if (settings.iconPackPackage.isNotBlank()) {
+            val helper = IconPackHelper(ctx)
+            helper.getInstalledIconPacks().find { it.packageName == settings.iconPackPackage }?.let { _ ->
+                viewModel.installedApps.associate { app ->
+                    app.packageName to helper.getIconFromPack(settings.iconPackPackage, app.packageName)
+                }.filterValues { it != null }.mapValues { it.value!! }
+            } ?: emptyMap()
+        } else emptyMap()
+    }
 
     var rawOffset by remember { mutableFloatStateOf(0f) }
     var screenHeight by remember { mutableFloatStateOf(1f) }
@@ -150,13 +163,13 @@ fun LauncherScreen(viewModel: LauncherViewModel = viewModel()) {
                             }
                     ) {
                         Column(Modifier.fillMaxSize()) {
-                            WorkspacePages(viewModel, Modifier.weight(1f))
+                            WorkspacePages(viewModel, iconOverrides, Modifier.weight(1f))
                         }
                     }
                 } else {
                     if (displayOffset < maxOffset * 0.95f) {
                         Column(Modifier.fillMaxSize()) {
-                            WorkspacePages(viewModel, Modifier.weight(1f))
+                            WorkspacePages(viewModel, iconOverrides, Modifier.weight(1f))
                         }
                     }
                 }
@@ -169,7 +182,7 @@ fun LauncherScreen(viewModel: LauncherViewModel = viewModel()) {
                     .graphicsLayer { alpha = homeFade; translationY = -displayOffset }
             ) {
                 if (!drawerOpen || displayOffset < maxOffset * 0.95f) {
-                    HotseatBar(viewModel, Modifier.fillMaxWidth(), settings)
+                    HotseatBar(viewModel, Modifier.fillMaxWidth(), settings, iconOverrides)
                 }
             }
         }
@@ -200,7 +213,7 @@ fun LauncherScreen(viewModel: LauncherViewModel = viewModel()) {
                         )
                     }
             ) {
-                AppDrawerContent(viewModel, settings) { rawOffset = 0f; drawerOpen = false }
+                AppDrawerContent(viewModel, settings, iconOverrides) { rawOffset = 0f; drawerOpen = false }
             }
         }
     }
@@ -217,7 +230,7 @@ fun LauncherScreen(viewModel: LauncherViewModel = viewModel()) {
 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
-fun WorkspacePages(viewModel: LauncherViewModel, modifier: Modifier = Modifier) {
+fun WorkspacePages(viewModel: LauncherViewModel, iconOverrides: Map<String, android.graphics.drawable.Drawable> = emptyMap(), modifier: Modifier = Modifier) {
     var showContextMenu by remember { mutableStateOf(false) }
     val ctx = LocalContext.current
 
@@ -241,7 +254,7 @@ fun WorkspacePages(viewModel: LauncherViewModel, modifier: Modifier = Modifier) 
                     val rows = apps.chunked(4)
                     rows.forEach { row ->
                         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly) {
-                            row.forEach { app -> WorkspaceAppIcon(app, viewModel, Modifier.weight(1f)) }
+                            row.forEach { app -> WorkspaceAppIcon(app, viewModel, iconOverrides, Modifier.weight(1f)) }
                             repeat(4 - row.size) { Spacer(Modifier.weight(1f)) }
                         }
                         Spacer(Modifier.height(16.dp))
@@ -814,18 +827,12 @@ fun SettingsToggleRow(
 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
-fun WorkspaceAppIcon(app: LawnchairBackupImporter.ImportApp, viewModel: LauncherViewModel, modifier: Modifier = Modifier) {
+fun WorkspaceAppIcon(app: LawnchairBackupImporter.ImportApp, viewModel: LauncherViewModel, iconOverrides: Map<String, android.graphics.drawable.Drawable> = emptyMap(), modifier: Modifier = Modifier) {
     var showMenu by remember { mutableStateOf(false) }
     val ctx = LocalContext.current
     val pm = ctx.packageManager
-    val icon = remember(app.packageName, viewModel.settings.iconPackPackage) {
-        val pack = viewModel.settings.iconPackPackage
-        if (pack.isNotBlank()) {
-            val packIcon = IconPackHelper(ctx).getIconFromPack(pack, app.packageName)
-            if (packIcon != null) packIcon else try { pm.getApplicationIcon(app.packageName) } catch (_: Exception) { null }
-        } else {
-            try { pm.getApplicationIcon(app.packageName) } catch (_: Exception) { null }
-        }
+    val icon = remember(app.packageName, iconOverrides) {
+        iconOverrides[app.packageName] ?: try { pm.getApplicationIcon(app.packageName) } catch (_: Exception) { null }
     }
     Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = modifier.combinedClickable(onClick = { viewModel.launchApp(app.packageName) }, onLongClick = { showMenu = true })) {
         val bitmap = icon?.toBitmap(64, 64)?.asImageBitmap()
@@ -848,25 +855,16 @@ fun WorkspaceAppIcon(app: LawnchairBackupImporter.ImportApp, viewModel: Launcher
 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
-fun HotseatBar(viewModel: LauncherViewModel, modifier: Modifier = Modifier, settings: LauncherSettings) {
-    val ctx = LocalContext.current
+fun HotseatBar(viewModel: LauncherViewModel, modifier: Modifier = Modifier, settings: LauncherSettings, iconOverrides: Map<String, android.graphics.drawable.Drawable> = emptyMap()) {
     Box(modifier = modifier) {
         Row(Modifier.fillMaxWidth().padding(horizontal = 24.dp, vertical = 4.dp), horizontalArrangement = Arrangement.SpaceEvenly, verticalAlignment = Alignment.CenterVertically) {
             viewModel.hotseatApps.take(settings.dockIconCount).forEach { app ->
                 var showMenu by remember { mutableStateOf(false) }
                 val fullApp = viewModel.installedApps.find { it.packageName == app.packageName }
-                val icon = fullApp?.icon
+                val icon = iconOverrides[app.packageName] ?: fullApp?.icon
                 Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.combinedClickable(onClick = { viewModel.launchApp(app.packageName) }, onLongClick = { showMenu = true })) {
-                    val packIcon = remember(app.packageName, settings.iconPackPackage) {
-                        val pack = settings.iconPackPackage
-                        if (pack.isNotBlank()) {
-                            val resolved = IconPackHelper(ctx).getIconFromPack(pack, app.packageName)
-                            resolved
-                        } else null
-                    }
-                    val displayIcon = packIcon ?: icon
-                    val bitmap = try { displayIcon?.let { 
-                        if (displayIcon is android.graphics.drawable.Drawable) displayIcon.toBitmap(52, 52)?.asImageBitmap() 
+                    val bitmap = try { icon?.let { 
+                        if (icon is android.graphics.drawable.Drawable) icon.toBitmap(52, 52)?.asImageBitmap() 
                         else null 
                     } } catch (_: Exception) { null }
                     Box {
@@ -911,7 +909,7 @@ fun RepoStrip(repos: List<RepoConfig>, viewModel: LauncherViewModel, modifier: M
 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
-fun AppDrawerContent(viewModel: LauncherViewModel, settings: LauncherSettings, onClose: () -> Unit) {
+fun AppDrawerContent(viewModel: LauncherViewModel, settings: LauncherSettings, iconOverrides: Map<String, android.graphics.drawable.Drawable> = emptyMap(), onClose: () -> Unit) {
     Surface(modifier = Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background.copy(alpha = 0.97f)) {
         Column(Modifier.fillMaxSize().statusBarsPadding()) {
             if (settings.showSearchBar) {
@@ -927,7 +925,7 @@ fun AppDrawerContent(viewModel: LauncherViewModel, settings: LauncherSettings, o
                 val rows = apps.chunked(settings.gridColumns)
                 rows.forEach { row ->
                     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly) {
-                        row.forEach { app -> AppDrawerItem(app, viewModel, onClose, Modifier.weight(1f), settings) }
+                            row.forEach { app -> AppDrawerItem(app, viewModel, onClose, Modifier.weight(1f), settings, iconOverrides) }
                         repeat(settings.gridColumns - row.size) { Spacer(Modifier.weight(1f)) }
                     }
                     Spacer(Modifier.height(8.dp))
@@ -939,16 +937,9 @@ fun AppDrawerContent(viewModel: LauncherViewModel, settings: LauncherSettings, o
 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
-fun AppDrawerItem(app: AppInfo, viewModel: LauncherViewModel, onClose: () -> Unit, modifier: Modifier = Modifier, settings: LauncherSettings) {
+fun AppDrawerItem(app: AppInfo, viewModel: LauncherViewModel, onClose: () -> Unit, modifier: Modifier = Modifier, settings: LauncherSettings, iconOverrides: Map<String, android.graphics.drawable.Drawable> = emptyMap()) {
     var showMenu by remember { mutableStateOf(false) }
-    val ctx = LocalContext.current
-    val packIconDrawable = remember(app.packageName, settings.iconPackPackage) {
-        val pack = settings.iconPackPackage
-        if (pack.isNotBlank()) {
-            IconPackHelper(ctx).getIconFromPack(pack, app.packageName)
-        } else null
-    }
-    val displayIcon = packIconDrawable ?: app.icon
+    val displayIcon = iconOverrides[app.packageName] ?: app.icon
     Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = modifier.combinedClickable(
         onClick = { viewModel.launchApp(app.packageName); onClose() },
         onLongClick = { showMenu = true }
