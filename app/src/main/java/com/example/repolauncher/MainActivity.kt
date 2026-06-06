@@ -29,9 +29,12 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.statusBars
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -81,6 +84,9 @@ fun LauncherScreen(viewModel: LauncherViewModel = viewModel()) {
     var rawOffset by remember { mutableFloatStateOf(0f) }
     var screenHeight by remember { mutableFloatStateOf(1f) }
     var drawerOpen by remember { mutableStateOf(false) }
+    val statusBarHeight = with(LocalDensity.current) { WindowInsets.statusBars.getTop(this).toFloat() }
+    /** Max drawer offset = screen minus status bar, so content sits below clock/battery */
+    val maxOffset = screenHeight - statusBarHeight.coerceAtLeast(48f)
 
     val displayOffset by animateFloatAsState(
         targetValue = rawOffset,
@@ -91,11 +97,11 @@ fun LauncherScreen(viewModel: LauncherViewModel = viewModel()) {
     fun commit(totalDy: Float, velocityY: Float) {
         val goingUp = velocityY < -VEL_THRESHOLD
         val goingDown = velocityY > VEL_THRESHOLD
-        if (goingUp) { rawOffset = screenHeight; drawerOpen = true }
+        if (goingUp) { rawOffset = maxOffset; drawerOpen = true }
         else if (goingDown) { rawOffset = 0f; drawerOpen = false }
-        else if (totalDy < 0 && abs(totalDy) > 20f) { rawOffset = screenHeight; drawerOpen = true }
+        else if (totalDy < 0 && abs(totalDy) > 20f) { rawOffset = maxOffset; drawerOpen = true }
         else if (totalDy > 0 && abs(totalDy) > 20f) { rawOffset = 0f; drawerOpen = false }
-        else if (rawOffset > screenHeight * POS_THRESHOLD) { rawOffset = screenHeight; drawerOpen = true }
+        else if (rawOffset > screenHeight * POS_THRESHOLD) { rawOffset = maxOffset; drawerOpen = true }
         else { rawOffset = 0f; drawerOpen = false }
     }
 
@@ -119,7 +125,7 @@ fun LauncherScreen(viewModel: LauncherViewModel = viewModel()) {
                                     change.consume()
                                     cumulativeDy += dy
                                     lastDy = dy; lastTime = SystemClock.uptimeMillis()
-                                    rawOffset = (rawOffset - dy * DRAG_MULT).coerceIn(0f, screenHeight)
+                                    rawOffset = (rawOffset - dy * DRAG_MULT).coerceIn(0f, maxOffset)
                                 },
                                 onDragEnd = {
                                     val elapsed = SystemClock.uptimeMillis() - lastTime
@@ -137,10 +143,13 @@ fun LauncherScreen(viewModel: LauncherViewModel = viewModel()) {
                     }
                 }
             } else {
-                Column(Modifier.fillMaxSize()) {
-                    WorkspacePages(viewModel, Modifier.weight(1f))
-                    HotseatBar(viewModel, Modifier.fillMaxWidth(), settings)
-                    RepoStrip(repos, viewModel, Modifier.fillMaxWidth())
+                // Hide home screen scrub when drawer is open (still advance offset for smooth return)
+                if (displayOffset < maxOffset * 0.95f) {
+                    Column(Modifier.fillMaxSize()) {
+                        WorkspacePages(viewModel, Modifier.weight(1f))
+                        HotseatBar(viewModel, Modifier.fillMaxWidth(), settings)
+                        RepoStrip(repos, viewModel, Modifier.fillMaxWidth())
+                    }
                 }
             }
         }
@@ -149,7 +158,7 @@ fun LauncherScreen(viewModel: LauncherViewModel = viewModel()) {
             Box(
                 modifier = Modifier
                     .fillMaxSize()
-                    .offset { IntOffset(0, (screenHeight - displayOffset).roundToInt()) }
+                    .offset { IntOffset(0, (maxOffset - displayOffset).roundToInt()) }
                     .pointerInput(Unit) {
                         var cumulativeDy = 0f
                         var lastDy = 0f; var lastTime = 0L
@@ -159,7 +168,7 @@ fun LauncherScreen(viewModel: LauncherViewModel = viewModel()) {
                                 change.consume()
                                 cumulativeDy += dy
                                 lastDy = dy; lastTime = SystemClock.uptimeMillis()
-                                rawOffset = (rawOffset - dy * DRAG_MULT).coerceIn(0f, screenHeight)
+                                rawOffset = (rawOffset - dy * DRAG_MULT).coerceIn(0f, maxOffset)
                             },
                             onDragEnd = {
                                 val elapsed = SystemClock.uptimeMillis() - lastTime
@@ -295,6 +304,40 @@ fun WorkspacePages(viewModel: LauncherViewModel, modifier: Modifier = Modifier) 
                                 Column {
                                     Text("Widgets", style = MaterialTheme.typography.bodyLarge)
                                     Text("Add widgets to your home screen", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                }
+                            }
+                        }
+                        // Add repository
+                        Surface(
+                            onClick = {
+                                showContextMenu = false
+                                viewModel.showAddRepoDialog = true
+                            },
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Row(Modifier.padding(horizontal = 16.dp, vertical = 12.dp), verticalAlignment = Alignment.CenterVertically) {
+                                Icon(Icons.Default.Add, null, tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(24.dp))
+                                Spacer(Modifier.width(16.dp))
+                                Column {
+                                    Text("Add repository", style = MaterialTheme.typography.bodyLarge)
+                                    Text("Add GitHub repo for APK installs", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                }
+                            }
+                        }
+                        // Import Lawnchair backup
+                        Surface(
+                            onClick = {
+                                showContextMenu = false
+                                viewModel.showBackupImportDialog = true
+                            },
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Row(Modifier.padding(horizontal = 16.dp, vertical = 12.dp), verticalAlignment = Alignment.CenterVertically) {
+                                Icon(Icons.Default.Restore, null, tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(24.dp))
+                                Spacer(Modifier.width(16.dp))
+                                Column {
+                                    Text("Import Lawnchair backup", style = MaterialTheme.typography.bodyLarge)
+                                    Text("Restore home screen layout", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                                 }
                             }
                         }
@@ -752,8 +795,6 @@ fun RepoStrip(repos: List<RepoConfig>, viewModel: LauncherViewModel, modifier: M
             }
             if (repos.isEmpty()) Text("No repos", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f), modifier = Modifier.padding(horizontal = 8.dp))
             Spacer(Modifier.weight(1f))
-            IconButton(onClick = { viewModel.showAddRepoDialog = true }, modifier = Modifier.size(28.dp)) { Icon(Icons.Default.Add, "Add repo", Modifier.size(18.dp)) }
-            IconButton(onClick = { viewModel.showBackupImportDialog = true }, modifier = Modifier.size(28.dp)) { Icon(Icons.Default.Restore, "Import backup", Modifier.size(16.dp)) }
         }
     }
 }
