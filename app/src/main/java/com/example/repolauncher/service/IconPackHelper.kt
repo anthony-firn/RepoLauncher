@@ -244,6 +244,49 @@ class IconPackHelper(private val context: Context) {
         }
     }
 
+    /**
+     * Parse appfilter.xml ONE time, build map of all package -> drawable.
+     * Safe for many apps — no repeated XML parsing.
+     */
+    fun resolveAllIcons(packPackage: String): Map<String, Drawable?> {
+        try {
+            val pm = context.packageManager
+            val packResources = pm.getResourcesForApplication(packPackage)
+            val parser = getXmlParser(packResources, packPackage) ?: return emptyMap()
+            val drawableNames = mutableMapOf<String, String>() // appPackage -> drawableName
+
+            parser.next() // move to first tag
+            var eventType = parser.eventType
+            while (eventType != XmlPullParser.END_DOCUMENT) {
+                if (eventType == XmlPullParser.START_TAG && parser.name == "item") {
+                    val component = parser.getAttributeValue(null, "component") ?: ""
+                    val drawableName = parser.getAttributeValue(null, "drawable") ?: ""
+
+                    var compStr = component
+                    if (compStr.startsWith("ComponentInfo{") && compStr.endsWith("}")) {
+                        compStr = compStr.substring(14, compStr.length - 1)
+                    }
+                    val slashIdx = compStr.indexOf('/')
+                    val appPkg = if (slashIdx > 0) compStr.substring(0, slashIdx) else ""
+                    if (appPkg.isNotBlank() && drawableName.isNotBlank()) {
+                        drawableNames[appPkg] = drawableName
+                    }
+                }
+                eventType = parser.next()
+            }
+
+            val result = mutableMapOf<String, Drawable?>()
+            for ((appPkg, drawableName) in drawableNames) {
+                try {
+                    @Suppress("DEPRECATION")
+                    val id = packResources.getIdentifier(drawableName, "drawable", packPackage)
+                    if (id != 0) result[appPkg] = packResources.getDrawable(id, null)
+                } catch (_: Exception) {}
+            }
+            return result
+        } catch (_: Exception) { return emptyMap() }
+    }
+
     companion object {
         private const val TAG = "IconPackHelper"
     }
