@@ -28,6 +28,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.statusBars
@@ -155,10 +156,13 @@ fun LauncherScreen(viewModel: LauncherViewModel = viewModel()) {
             }
         }
 
+        val drawerFraction = (displayOffset / maxOffset).coerceIn(0f, 1f)
+
         if (displayOffset > 1f || drawerOpen) {
             Box(
                 modifier = Modifier
                     .fillMaxSize()
+                    .graphicsLayer { alpha = drawerFraction }
                     .offset { IntOffset(0, (maxOffset - displayOffset).roundToInt()) }
                     .pointerInput(Unit) {
                         var cumulativeDy = 0f
