@@ -611,6 +611,49 @@ fun SettingsScreen(viewModel: LauncherViewModel) {
                 )
                 HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
 
+                // Icon pack
+                val iconPacks = remember { IconPackHelper(ctx).getInstalledIconPacks() }
+                val currentIconPack = remember { iconPacks.find { it.packageName == viewModel.settings.iconPackPackage } }
+                SettingsSectionHeader("Icon pack")
+                SettingsItem(
+                    title = currentIconPack?.displayName ?: "None (system icons)",
+                    subtitle = "Apply custom icons from an installed pack",
+                    icon = Icons.Default.Palette,
+                    onClick = {}
+                )
+                if (iconPacks.isNotEmpty()) {
+                    Column(Modifier.fillMaxWidth()) {
+                        iconPacks.forEach { pack ->
+                            Surface(
+                                onClick = {
+                                    viewModel.updateSettings(
+                                        viewModel.settings.copy(
+                                            iconPackPackage = if (viewModel.settings.iconPackPackage == pack.packageName) "" else pack.packageName
+                                        )
+                                    )
+                                },
+                                modifier = Modifier.fillMaxWidth(),
+                                shape = RoundedCornerShape(8.dp),
+                                color = if (viewModel.settings.iconPackPackage == pack.packageName)
+                                    MaterialTheme.colorScheme.primary.copy(alpha = 0.15f)
+                                else Color.Transparent
+                            ) {
+                                Row(Modifier.padding(horizontal = 16.dp, vertical = 10.dp), verticalAlignment = Alignment.CenterVertically) {
+                                    Icon(Icons.Default.CheckCircle, null,
+                                        tint = if (viewModel.settings.iconPackPackage == pack.packageName) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.3f),
+                                        modifier = Modifier.size(20.dp))
+                                    Spacer(Modifier.width(12.dp))
+                                    Text(pack.displayName, style = MaterialTheme.typography.bodyMedium)
+                                }
+                            }
+                        }
+                    }
+                } else {
+                    Text("No icon packs installed", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f), modifier = Modifier.padding(horizontal = 16.dp))
+                    Text("Install Arcticons or another icon pack from Play Store", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f), modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp))
+                }
+                HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
+
                 // Backup & Restore
                 SettingsSectionHeader("Backup & Restore")
                 SettingsItem(
