@@ -151,14 +151,12 @@ fun LauncherScreen(viewModel: LauncherViewModel = viewModel()) {
                     ) {
                         Column(Modifier.fillMaxSize()) {
                             WorkspacePages(viewModel, Modifier.weight(1f))
-                            RepoStrip(repos, viewModel, Modifier.fillMaxWidth())
                         }
                     }
                 } else {
                     if (displayOffset < maxOffset * 0.95f) {
                         Column(Modifier.fillMaxSize()) {
                             WorkspacePages(viewModel, Modifier.weight(1f))
-                            RepoStrip(repos, viewModel, Modifier.fillMaxWidth())
                         }
                     }
                 }
@@ -235,19 +233,8 @@ fun WorkspacePages(viewModel: LauncherViewModel, modifier: Modifier = Modifier) 
         ) {
             val hasApps = viewModel.workspaceApps.isNotEmpty()
             if (!hasApps) {
-                Column(Modifier.fillMaxSize(), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center) {
-                    Icon(Icons.Default.Home, null, Modifier.size(64.dp), tint = MaterialTheme.colorScheme.primary.copy(alpha = 0.4f))
-                    Spacer(Modifier.height(16.dp))
-                    Text("Repo Launcher", style = MaterialTheme.typography.headlineMedium, color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.6f))
-                    Spacer(Modifier.height(8.dp))
-                    Text("Swipe up anywhere to open app drawer", color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f))
-                    Spacer(Modifier.height(24.dp))
-                    Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
-                        AssistChip(onClick = { }, label = { Text("Apps") }, leadingIcon = { Icon(Icons.Default.Apps, null, Modifier.size(18.dp)) })
-                        AssistChip(onClick = { viewModel.showAddRepoDialog = true }, label = { Text("Add Repo") }, leadingIcon = { Icon(Icons.Default.Add, null, Modifier.size(18.dp)) })
-                        AssistChip(onClick = { viewModel.showBackupImportDialog = true }, label = { Text("Import Backup") }, leadingIcon = { Icon(Icons.Default.Restore, null, Modifier.size(18.dp)) })
-                    }
-                }
+                // Empty workspace — keep it clean, no clutter
+                Box(Modifier.fillMaxSize())
             } else {
                 val apps = viewModel.workspaceApps
                 Column(Modifier.fillMaxSize().padding(horizontal = 16.dp, vertical = 8.dp)) {
@@ -862,8 +849,8 @@ fun WorkspaceAppIcon(app: LawnchairBackupImporter.ImportApp, viewModel: Launcher
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun HotseatBar(viewModel: LauncherViewModel, modifier: Modifier = Modifier, settings: LauncherSettings) {
-    Surface(modifier = modifier, color = MaterialTheme.colorScheme.surfaceContainerLow, tonalElevation = 2.dp) {
-        Row(Modifier.fillMaxWidth().padding(horizontal = 24.dp, vertical = 8.dp), horizontalArrangement = Arrangement.SpaceEvenly, verticalAlignment = Alignment.CenterVertically) {
+    Box(modifier = modifier) {
+        Row(Modifier.fillMaxWidth().padding(horizontal = 24.dp, vertical = 4.dp), horizontalArrangement = Arrangement.SpaceEvenly, verticalAlignment = Alignment.CenterVertically) {
             viewModel.hotseatApps.take(settings.dockIconCount).forEach { app ->
                 var showMenu by remember { mutableStateOf(false) }
                 val fullApp = viewModel.installedApps.find { it.packageName == app.packageName }
