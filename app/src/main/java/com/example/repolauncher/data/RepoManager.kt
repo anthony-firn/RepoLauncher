@@ -20,7 +20,8 @@ data class LauncherSettings(
     val dockIconCount: Int = 5,
     val iconSizePx: Int = 56,
     val showAppLabels: Boolean = true,
-    val showSearchBar: Boolean = true
+    val showSearchBar: Boolean = true,
+    val iconPackPackage: String = ""
 )
 
 class RepoManager(private val context: Context) {
@@ -33,6 +34,7 @@ class RepoManager(private val context: Context) {
         private val ICON_SIZE_KEY = intPreferencesKey("icon_size")
         private val SHOW_LABELS_KEY = intPreferencesKey("show_labels")
         private val SHOW_SEARCH_KEY = intPreferencesKey("show_search")
+        private val ICON_PACK_KEY = stringPreferencesKey("icon_pack_package")
     }
 
     private val json = Json { ignoreUnknownKeys = true; prettyPrint = true }
@@ -49,7 +51,8 @@ class RepoManager(private val context: Context) {
             dockIconCount = prefs[DOCK_ICON_COUNT_KEY] ?: 5,
             iconSizePx = prefs[ICON_SIZE_KEY] ?: 56,
             showAppLabels = (prefs[SHOW_LABELS_KEY] ?: 1) == 1,
-            showSearchBar = (prefs[SHOW_SEARCH_KEY] ?: 1) == 1
+            showSearchBar = (prefs[SHOW_SEARCH_KEY] ?: 1) == 1,
+            iconPackPackage = prefs[ICON_PACK_KEY] ?: ""
         )
     }
 
@@ -116,6 +119,7 @@ class RepoManager(private val context: Context) {
             prefs[ICON_SIZE_KEY] = settings.iconSizePx
             prefs[SHOW_LABELS_KEY] = if (settings.showAppLabels) 1 else 0
             prefs[SHOW_SEARCH_KEY] = if (settings.showSearchBar) 1 else 0
+            prefs[ICON_PACK_KEY] = settings.iconPackPackage
         }
     }
 }

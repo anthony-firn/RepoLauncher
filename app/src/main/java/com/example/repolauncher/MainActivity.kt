@@ -44,6 +44,7 @@ import androidx.core.graphics.drawable.toBitmap
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.example.repolauncher.data.*
+import com.example.repolauncher.service.IconPackHelper
 import com.example.repolauncher.service.LawnchairBackupImporter
 import kotlin.math.abs
 import kotlin.math.roundToInt
@@ -324,23 +325,6 @@ fun WorkspacePages(viewModel: LauncherViewModel, modifier: Modifier = Modifier) 
                                 }
                             }
                         }
-                        // Import Lawnchair backup
-                        Surface(
-                            onClick = {
-                                showContextMenu = false
-                                viewModel.showBackupImportDialog = true
-                            },
-                            modifier = Modifier.fillMaxWidth()
-                        ) {
-                            Row(Modifier.padding(horizontal = 16.dp, vertical = 12.dp), verticalAlignment = Alignment.CenterVertically) {
-                                Icon(Icons.Default.Restore, null, tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(24.dp))
-                                Spacer(Modifier.width(16.dp))
-                                Column {
-                                    Text("Import Lawnchair backup", style = MaterialTheme.typography.bodyLarge)
-                                    Text("Restore home screen layout", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                                }
-                            }
-                        }
                         // Settings
                         Surface(
                             onClick = {
@@ -480,6 +464,47 @@ fun CustomizeScreen(viewModel: LauncherViewModel) {
                 )
                 Spacer(Modifier.height(8.dp))
 
+                // Icon pack
+                Text("Icon Pack", style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Spacer(Modifier.height(8.dp))
+                val iconPacks = remember { IconPackHelper(ctx).getInstalledIconPacks() }
+                SettingsItem(
+                    title = localSettings.iconPackPackage.ifEmpty { "None (system icons)" },
+                    subtitle = "Apply custom icons from a pack",
+                    icon = Icons.Default.Palette,
+                    onClick = { }
+                )
+                if (iconPacks.isNotEmpty()) {
+                    Column(Modifier.fillMaxWidth()) {
+                        iconPacks.forEach { pack ->
+                            Surface(
+                                onClick = {
+                                    localSettings = localSettings.copy(
+                                        iconPackPackage = if (localSettings.iconPackPackage == pack.packageName) "" else pack.packageName
+                                    )
+                                },
+                                modifier = Modifier.fillMaxWidth(),
+                                shape = RoundedCornerShape(8.dp),
+                                color = if (localSettings.iconPackPackage == pack.packageName)
+                                    MaterialTheme.colorScheme.primary.copy(alpha = 0.15f)
+                                else Color.Transparent
+                            ) {
+                                Row(Modifier.padding(horizontal = 16.dp, vertical = 10.dp), verticalAlignment = Alignment.CenterVertically) {
+                                    Icon(Icons.Default.CheckCircle, null,
+                                        tint = if (localSettings.iconPackPackage == pack.packageName) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.3f),
+                                        modifier = Modifier.size(20.dp))
+                                    Spacer(Modifier.width(12.dp))
+                                    Text(pack.displayName, style = MaterialTheme.typography.bodyMedium)
+                                }
+                            }
+                        }
+                    }
+                } else {
+                    Text("No icon packs installed", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f), modifier = Modifier.padding(horizontal = 16.dp))
+                    Text("Install Arcticons or another icon pack from Play Store", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f), modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp))
+                }
+                Spacer(Modifier.height(8.dp))
+
                 // Toggle switches
                 SettingsToggleRow(
                     title = "Show app labels",
@@ -583,6 +608,16 @@ fun SettingsScreen(viewModel: LauncherViewModel) {
                     subtitle = "Configure dock appearance and behavior",
                     icon = Icons.Default.Star,
                     onClick = { viewModel.showSettingsDialog = false; viewModel.launchCustomize() }
+                )
+                HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
+
+                // Backup & Restore
+                SettingsSectionHeader("Backup & Restore")
+                SettingsItem(
+                    title = "Import Lawnchair backup",
+                    subtitle = "Restore home screen layout from .lawnchairbackup",
+                    icon = Icons.Default.Restore,
+                    onClick = { viewModel.showSettingsDialog = false; viewModel.showBackupImportDialog = true }
                 )
                 HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
 
@@ -729,8 +764,17 @@ fun SettingsToggleRow(
 @Composable
 fun WorkspaceAppIcon(app: LawnchairBackupImporter.ImportApp, viewModel: LauncherViewModel, modifier: Modifier = Modifier) {
     var showMenu by remember { mutableStateOf(false) }
-    val pm = LocalContext.current.packageManager
-    val icon = remember(app.packageName) { try { pm.getApplicationIcon(app.packageName) } catch (_: Exception) { null } }
+    val ctx = LocalContext.current
+    val pm = ctx.packageManager
+    val icon = remember(app.packageName, viewModel.settings.iconPackPackage) {
+        val pack = viewModel.settings.iconPackPackage
+        if (pack.isNotBlank()) {
+            val packIcon = IconPackHelper(ctx).getIconFromPack(pack, app.packageName)
+            if (packIcon != null) packIcon else try { pm.getApplicationIcon(app.packageName) } catch (_: Exception) { null }
+        } else {
+            try { pm.getApplicationIcon(app.packageName) } catch (_: Exception) { null }
+        }
+    }
     Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = modifier.combinedClickable(onClick = { viewModel.launchApp(app.packageName) }, onLongClick = { showMenu = true })) {
         val bitmap = icon?.toBitmap(64, 64)?.asImageBitmap()
         Box {
@@ -760,7 +804,10 @@ fun HotseatBar(viewModel: LauncherViewModel, modifier: Modifier = Modifier, sett
                 val fullApp = viewModel.installedApps.find { it.packageName == app.packageName }
                 val icon = fullApp?.icon
                 Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.combinedClickable(onClick = { viewModel.launchApp(app.packageName) }, onLongClick = { showMenu = true })) {
-                    val bitmap = icon?.toBitmap(52, 52)?.asImageBitmap()
+                    val bitmap = try { icon?.let { 
+                        if (icon is android.graphics.drawable.Drawable) icon.toBitmap(52, 52)?.asImageBitmap() 
+                        else null 
+                    } } catch (_: Exception) { null }
                     Box {
                         if (bitmap != null) Image(bitmap = bitmap, contentDescription = app.displayName, modifier = Modifier.size(48.dp).clip(RoundedCornerShape(12.dp)))
                         else Icon(Icons.Default.Android, null, modifier = Modifier.size(48.dp).clip(RoundedCornerShape(12.dp)).background(MaterialTheme.colorScheme.surfaceVariant).padding(10.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
