@@ -45,12 +45,12 @@ import com.example.repolauncher.service.LawnchairBackupImporter
 import kotlin.math.abs
 import kotlin.math.roundToInt
 
-/** Drag amplification: finger moves 1px → drawer moves 3x, for snappy response. */
-private const val DRAG_MULT = 3f
-/** Position threshold: 15% of screen height */
-private const val POS_THRESHOLD = 0.15f
-/** Velocity threshold: 200 px/s */
-private const val VEL_THRESHOLD = 200f
+/** Lawnchair-style: 1:1 finger tracking, momentum on quick flick */
+private const val DRAG_MULT = 1f
+/** Position threshold: 20% of screen height */
+private const val POS_THRESHOLD = 0.20f
+/** Velocity threshold: 300 px/s — a quick flick commits the transition */
+private const val VEL_THRESHOLD = 300f
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -84,7 +84,7 @@ fun LauncherScreen(viewModel: LauncherViewModel = viewModel()) {
 
     val displayOffset by animateFloatAsState(
         targetValue = rawOffset,
-        animationSpec = spring(dampingRatio = Spring.DampingRatioNoBouncy, stiffness = Spring.StiffnessHigh),
+        animationSpec = spring(dampingRatio = Spring.DampingRatioNoBouncy, stiffness = Spring.StiffnessMediumLow),
         label = "drawerOffset"
     )
 
