@@ -107,6 +107,9 @@ fun LauncherScreen(viewModel: LauncherViewModel = viewModel()) {
         else { rawOffset = 0f; drawerOpen = false }
     }
 
+    val drawerFraction = (displayOffset / maxOffset).coerceIn(0f, 1f)
+    val homeFade = 1f - drawerFraction
+
     Box(
         modifier = Modifier
             .fillMaxSize()
@@ -114,49 +117,54 @@ fun LauncherScreen(viewModel: LauncherViewModel = viewModel()) {
             .onSizeChanged { screenHeight = it.height.coerceAtLeast(1).toFloat() }
     ) {
         Column(Modifier.fillMaxSize()) {
-            if (!drawerOpen) {
-                Box(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .pointerInput(Unit) {
-                            var cumulativeDy = 0f
-                            var lastDy = 0f; var lastTime = 0L
-                            detectVerticalDragGestures(
-                                onDragStart = { cumulativeDy = 0f; lastDy = 0f },
-                                onVerticalDrag = { change, dy ->
-                                    change.consume()
-                                    cumulativeDy += dy
-                                    lastDy = dy; lastTime = SystemClock.uptimeMillis()
-                                    rawOffset = (rawOffset - dy * DRAG_MULT).coerceIn(0f, maxOffset)
-                                },
-                                onDragEnd = {
-                                    val elapsed = SystemClock.uptimeMillis() - lastTime
-                                    val vel = if (elapsed > 0 && elapsed < 300) lastDy / (elapsed / 1000f) else 0f
-                                    commit(cumulativeDy, vel)
-                                },
-                                onDragCancel = { rawOffset = 0f; drawerOpen = false }
-                            )
+            val slideUpOffset = -(drawerFraction * 40f).roundToInt()
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .graphicsLayer { alpha = homeFade; translationY = slideUpOffset.toFloat() }
+            ) {
+                if (!drawerOpen) {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .pointerInput(Unit) {
+                                var cumulativeDy = 0f
+                                var lastDy = 0f; var lastTime = 0L
+                                detectVerticalDragGestures(
+                                    onDragStart = { cumulativeDy = 0f; lastDy = 0f },
+                                    onVerticalDrag = { change, dy ->
+                                        change.consume()
+                                        cumulativeDy += dy
+                                        lastDy = dy; lastTime = SystemClock.uptimeMillis()
+                                        rawOffset = (rawOffset - dy * DRAG_MULT).coerceIn(0f, maxOffset)
+                                    },
+                                    onDragEnd = {
+                                        val elapsed = SystemClock.uptimeMillis() - lastTime
+                                        val vel = if (elapsed > 0 && elapsed < 300) lastDy / (elapsed / 1000f) else 0f
+                                        commit(cumulativeDy, vel)
+                                    },
+                                    onDragCancel = { rawOffset = 0f; drawerOpen = false }
+                                )
+                            }
+                    ) {
+                        Column(Modifier.fillMaxSize()) {
+                            WorkspacePages(viewModel, Modifier.weight(1f))
+                            HotseatBar(viewModel, Modifier.fillMaxWidth(), settings)
+                            RepoStrip(repos, viewModel, Modifier.fillMaxWidth())
                         }
-                ) {
-                    Column(Modifier.fillMaxSize()) {
-                        WorkspacePages(viewModel, Modifier.weight(1f))
-                        HotseatBar(viewModel, Modifier.fillMaxWidth(), settings)
-                        RepoStrip(repos, viewModel, Modifier.fillMaxWidth())
                     }
-                }
-            } else {
-                // Hide home screen scrub when drawer is open (still advance offset for smooth return)
-                if (displayOffset < maxOffset * 0.95f) {
-                    Column(Modifier.fillMaxSize()) {
-                        WorkspacePages(viewModel, Modifier.weight(1f))
-                        HotseatBar(viewModel, Modifier.fillMaxWidth(), settings)
-                        RepoStrip(repos, viewModel, Modifier.fillMaxWidth())
+                } else {
+                    // Hide home screen scrub when drawer is open (still advance offset for smooth return)
+                    if (displayOffset < maxOffset * 0.95f) {
+                        Column(Modifier.fillMaxSize()) {
+                            WorkspacePages(viewModel, Modifier.weight(1f))
+                            HotseatBar(viewModel, Modifier.fillMaxWidth(), settings)
+                            RepoStrip(repos, viewModel, Modifier.fillMaxWidth())
+                        }
                     }
                 }
             }
         }
-
-        val drawerFraction = (displayOffset / maxOffset).coerceIn(0f, 1f)
 
         if (displayOffset > 1f || drawerOpen) {
             Box(
