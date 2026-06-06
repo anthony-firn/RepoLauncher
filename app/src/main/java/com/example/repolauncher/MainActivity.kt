@@ -849,6 +849,7 @@ fun WorkspaceAppIcon(app: LawnchairBackupImporter.ImportApp, viewModel: Launcher
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun HotseatBar(viewModel: LauncherViewModel, modifier: Modifier = Modifier, settings: LauncherSettings) {
+    val ctx = LocalContext.current
     Box(modifier = modifier) {
         Row(Modifier.fillMaxWidth().padding(horizontal = 24.dp, vertical = 4.dp), horizontalArrangement = Arrangement.SpaceEvenly, verticalAlignment = Alignment.CenterVertically) {
             viewModel.hotseatApps.take(settings.dockIconCount).forEach { app ->
@@ -856,8 +857,16 @@ fun HotseatBar(viewModel: LauncherViewModel, modifier: Modifier = Modifier, sett
                 val fullApp = viewModel.installedApps.find { it.packageName == app.packageName }
                 val icon = fullApp?.icon
                 Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.combinedClickable(onClick = { viewModel.launchApp(app.packageName) }, onLongClick = { showMenu = true })) {
-                    val bitmap = try { icon?.let { 
-                        if (icon is android.graphics.drawable.Drawable) icon.toBitmap(52, 52)?.asImageBitmap() 
+                    val packIcon = remember(app.packageName, settings.iconPackPackage) {
+                        val pack = settings.iconPackPackage
+                        if (pack.isNotBlank()) {
+                            val resolved = IconPackHelper(ctx).getIconFromPack(pack, app.packageName)
+                            resolved
+                        } else null
+                    }
+                    val displayIcon = packIcon ?: icon
+                    val bitmap = try { displayIcon?.let { 
+                        if (displayIcon is android.graphics.drawable.Drawable) displayIcon.toBitmap(52, 52)?.asImageBitmap() 
                         else null 
                     } } catch (_: Exception) { null }
                     Box {
@@ -932,11 +941,19 @@ fun AppDrawerContent(viewModel: LauncherViewModel, settings: LauncherSettings, o
 @Composable
 fun AppDrawerItem(app: AppInfo, viewModel: LauncherViewModel, onClose: () -> Unit, modifier: Modifier = Modifier, settings: LauncherSettings) {
     var showMenu by remember { mutableStateOf(false) }
+    val ctx = LocalContext.current
+    val packIconDrawable = remember(app.packageName, settings.iconPackPackage) {
+        val pack = settings.iconPackPackage
+        if (pack.isNotBlank()) {
+            IconPackHelper(ctx).getIconFromPack(pack, app.packageName)
+        } else null
+    }
+    val displayIcon = packIconDrawable ?: app.icon
     Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = modifier.combinedClickable(
         onClick = { viewModel.launchApp(app.packageName); onClose() },
         onLongClick = { showMenu = true }
     )) {
-        val bitmap = app.icon?.toBitmap(56, 56)?.asImageBitmap()
+        val bitmap = displayIcon?.toBitmap(56, 56)?.asImageBitmap()
         Box {
             if (bitmap != null) Image(bitmap = bitmap, contentDescription = app.appName, modifier = Modifier.size(52.dp).clip(RoundedCornerShape(12.dp)))
             else Icon(Icons.Default.Android, null, Modifier.size(52.dp))
