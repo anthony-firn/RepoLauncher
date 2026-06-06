@@ -158,8 +158,7 @@ fun LauncherScreen(viewModel: LauncherViewModel = viewModel()) {
             Box(
                 modifier = Modifier
                     .fillMaxSize()
-                    // Offset so drawer content starts below status bar when fully open
-                    .offset { IntOffset(0, (statusBarHeight.roundToInt() + (maxOffset - displayOffset).roundToInt())) }
+                    .offset { IntOffset(0, (maxOffset - displayOffset).roundToInt()) }
                     .pointerInput(Unit) {
                         var cumulativeDy = 0f
                         var lastDy = 0f; var lastTime = 0L
@@ -806,7 +805,7 @@ fun RepoStrip(repos: List<RepoConfig>, viewModel: LauncherViewModel, modifier: M
 @Composable
 fun AppDrawerContent(viewModel: LauncherViewModel, settings: LauncherSettings, onClose: () -> Unit) {
     Surface(modifier = Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background.copy(alpha = 0.97f)) {
-        Column(Modifier.fillMaxSize()) {
+        Column(Modifier.fillMaxSize().statusBarsPadding()) {
             if (settings.showSearchBar) {
                 OutlinedTextField(value = viewModel.searchQuery, onValueChange = { viewModel.searchQuery = it },
                     modifier = Modifier.fillMaxWidth().padding(16.dp), placeholder = { Text("Search apps…") },
