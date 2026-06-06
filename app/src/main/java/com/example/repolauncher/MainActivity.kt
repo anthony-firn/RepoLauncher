@@ -163,13 +163,12 @@ fun LauncherScreen(viewModel: LauncherViewModel = viewModel()) {
                     }
                 }
             }
-            // ── Dock: slides up 80px (more aggressively) and fades independently ──
-            val dockSlideUp = -(drawerFraction * 80f).roundToInt()
+            // ── Dock: moves UP 1:1 with the rising drawer, fades in/out ──
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
                     .wrapContentHeight()
-                    .graphicsLayer { alpha = homeFade; translationY = dockSlideUp.toFloat() }
+                    .graphicsLayer { alpha = homeFade; translationY = -displayOffset }
             ) {
                 if (!drawerOpen || displayOffset < maxOffset * 0.95f) {
                     HotseatBar(viewModel, Modifier.fillMaxWidth(), settings)
