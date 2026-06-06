@@ -158,7 +158,8 @@ fun LauncherScreen(viewModel: LauncherViewModel = viewModel()) {
             Box(
                 modifier = Modifier
                     .fillMaxSize()
-                    .offset { IntOffset(0, (maxOffset - displayOffset).roundToInt()) }
+                    // Offset so drawer content starts below status bar when fully open
+                    .offset { IntOffset(0, (statusBarHeight.roundToInt() + (maxOffset - displayOffset).roundToInt())) }
                     .pointerInput(Unit) {
                         var cumulativeDy = 0f
                         var lastDy = 0f; var lastTime = 0L
