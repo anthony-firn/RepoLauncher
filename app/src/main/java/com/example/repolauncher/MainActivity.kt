@@ -47,6 +47,8 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import com.example.repolauncher.data.*
 import com.example.repolauncher.service.IconPackHelper
 import com.example.repolauncher.service.LawnchairBackupImporter
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import kotlin.math.abs
 import kotlin.math.roundToInt
 
@@ -84,11 +86,12 @@ fun LauncherScreen(viewModel: LauncherViewModel = viewModel()) {
     val settings = viewModel.settings
     val ctx = LocalContext.current
 
-    // Parse icon pack XML once — no freeze for many apps
-    val iconOverrides = remember(settings.iconPackPackage) {
-        if (settings.iconPackPackage.isNotBlank()) {
-            try { IconPackHelper(ctx).resolveAllIcons(settings.iconPackPackage) } catch (_: Exception) { emptyMap() }
-        } else emptyMap()
+    // ── Icon pack: ONE helper instance, load ONCE on IO (like Lawnchair) ──
+    val iconPackHelper = remember { IconPackHelper(ctx) }
+
+    // Load icon pack map off main thread — runs when pack changes
+    LaunchedEffect(settings.iconPackPackage) {
+        iconPackHelper.loadForPackage(settings.iconPackPackage)
     }
 
     var rawOffset by remember { mutableFloatStateOf(0f) }
@@ -158,13 +161,13 @@ fun LauncherScreen(viewModel: LauncherViewModel = viewModel()) {
                             }
                     ) {
                         Column(Modifier.fillMaxSize()) {
-                            WorkspacePages(viewModel, Modifier.weight(1f))
+                            WorkspacePages(viewModel, iconPackHelper, Modifier.weight(1f))
                         }
                     }
                 } else {
                     if (displayOffset < maxOffset * 0.95f) {
                         Column(Modifier.fillMaxSize()) {
-                            WorkspacePages(viewModel, Modifier.weight(1f))
+                            WorkspacePages(viewModel, iconPackHelper, Modifier.weight(1f))
                         }
                     }
                 }
@@ -177,7 +180,7 @@ fun LauncherScreen(viewModel: LauncherViewModel = viewModel()) {
                     .graphicsLayer { alpha = homeFade; translationY = -displayOffset }
             ) {
                 if (!drawerOpen || displayOffset < maxOffset * 0.95f) {
-                    HotseatBar(viewModel, Modifier.fillMaxWidth(), settings, iconOverrides)
+                    HotseatBar(viewModel, iconPackHelper, Modifier.fillMaxWidth(), settings)
                 }
             }
         }
@@ -208,7 +211,7 @@ fun LauncherScreen(viewModel: LauncherViewModel = viewModel()) {
                         )
                     }
             ) {
-                AppDrawerContent(viewModel, settings, iconOverrides) { rawOffset = 0f; drawerOpen = false }
+                AppDrawerContent(viewModel, iconPackHelper, settings) { rawOffset = 0f; drawerOpen = false }
             }
         }
     }
@@ -225,7 +228,7 @@ fun LauncherScreen(viewModel: LauncherViewModel = viewModel()) {
 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
-fun WorkspacePages(viewModel: LauncherViewModel, modifier: Modifier = Modifier) {
+fun WorkspacePages(viewModel: LauncherViewModel, iconPackHelper: IconPackHelper, modifier: Modifier = Modifier) {
     var showContextMenu by remember { mutableStateOf(false) }
     val ctx = LocalContext.current
 
@@ -249,7 +252,7 @@ fun WorkspacePages(viewModel: LauncherViewModel, modifier: Modifier = Modifier) 
                     val rows = apps.chunked(4)
                     rows.forEach { row ->
                         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly) {
-                            row.forEach { app -> WorkspaceAppIcon(app, viewModel, Modifier.weight(1f)) }
+                            row.forEach { app -> WorkspaceAppIcon(app, viewModel, iconPackHelper, Modifier.weight(1f)) }
                             repeat(4 - row.size) { Spacer(Modifier.weight(1f)) }
                         }
                         Spacer(Modifier.height(16.dp))
@@ -822,20 +825,21 @@ fun SettingsToggleRow(
 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
-fun WorkspaceAppIcon(app: LawnchairBackupImporter.ImportApp, viewModel: LauncherViewModel, modifier: Modifier = Modifier) {
-    var showMenu by remember { mutableStateOf(false) }
-    val ctx = LocalContext.current
-    val pm = ctx.packageManager
-    val icon = remember(app.packageName, viewModel.settings.iconPackPackage) {
-        val pack = viewModel.settings.iconPackPackage
-        if (pack.isNotBlank()) {
-            val packIcon = IconPackHelper(ctx).getIconFromPack(pack, app.packageName)
-            if (packIcon != null) packIcon else try { pm.getApplicationIcon(app.packageName) } catch (_: Exception) { null }
-        } else {
-            try { pm.getApplicationIcon(app.packageName) } catch (_: Exception) { null }
-        }
-    }
-    Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = modifier.combinedClickable(onClick = { viewModel.launchApp(app.packageName) }, onLongClick = { showMenu = true })) {
+fun WorkspaceAppIcon(app: LawnchairBackupImporter.ImportApp, viewModel: LauncherViewModel, iconPackHelper: IconPackHelper, modifier: Modifier = Modifier) {
+var showMenu by remember { mutableStateOf(false) }
+val ctx = LocalContext.current
+val pm = ctx.packageManager
+val icon = remember(app.packageName, viewModel.settings.iconPackPackage) {
+val pack = viewModel.settings.iconPackPackage
+if (pack.isNotBlank()) {
+// Instant map lookup — no XML parsing
+val packIcon = iconPackHelper.getIconFromPack(pack, app.packageName)
+if (packIcon != null) packIcon else try { pm.getApplicationIcon(app.packageName) } catch (_: Exception) { null }
+} else {
+try { pm.getApplicationIcon(app.packageName) } catch (_: Exception) { null }
+}
+}
+Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = modifier.combinedClickable(onClick = { viewModel.launchApp(app.packageName) }, onLongClick = { showMenu = true })) {
         val bitmap = icon?.toBitmap(64, 64)?.asImageBitmap()
         Box {
             if (bitmap != null) Image(bitmap = bitmap, contentDescription = app.displayName, modifier = Modifier.size(56.dp).clip(RoundedCornerShape(12.dp)))
@@ -856,17 +860,25 @@ fun WorkspaceAppIcon(app: LawnchairBackupImporter.ImportApp, viewModel: Launcher
 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
-fun HotseatBar(viewModel: LauncherViewModel, modifier: Modifier = Modifier, settings: LauncherSettings, iconOverrides: Map<String, android.graphics.drawable.Drawable?> = emptyMap()) {
+fun HotseatBar(viewModel: LauncherViewModel, iconPackHelper: IconPackHelper, modifier: Modifier = Modifier, settings: LauncherSettings) {
 Box(modifier = modifier) {
 Row(Modifier.fillMaxWidth().padding(horizontal = 24.dp, vertical = 4.dp), horizontalArrangement = Arrangement.SpaceEvenly, verticalAlignment = Alignment.CenterVertically) {
 viewModel.hotseatApps.take(settings.dockIconCount).forEach { app ->
 var showMenu by remember { mutableStateOf(false) }
-val fullApp = viewModel.installedApps.find { it.packageName == app.packageName }
-val icon = fullApp?.icon
-Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.combinedClickable(onClick = { viewModel.launchApp(app.packageName) }, onLongClick = { showMenu = true })) {
-val displayIcon = iconOverrides[app.packageName] ?: icon
-                    val bitmap = try { displayIcon?.let { 
-                        if (displayIcon is android.graphics.drawable.Drawable) displayIcon.toBitmap(52, 52)?.asImageBitmap() 
+val ctx = LocalContext.current
+val pm = ctx.packageManager
+val icon = remember(app.packageName, settings.iconPackPackage) {
+val pack = settings.iconPackPackage
+if (pack.isNotBlank()) {
+val packIcon = iconPackHelper.getIconFromPack(pack, app.packageName)
+if (packIcon != null) packIcon else try { pm.getApplicationIcon(app.packageName) } catch (_: Exception) { null }
+} else {
+try { pm.getApplicationIcon(app.packageName) } catch (_: Exception) { null }
+}
+}
+                Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.combinedClickable(onClick = { viewModel.launchApp(app.packageName) }, onLongClick = { showMenu = true })) {
+                    val bitmap = try { icon?.let { 
+                        if (icon is android.graphics.drawable.Drawable) icon.toBitmap(52, 52)?.asImageBitmap() 
                         else null 
                     } } catch (_: Exception) { null }
                     Box {
@@ -911,42 +923,53 @@ fun RepoStrip(repos: List<RepoConfig>, viewModel: LauncherViewModel, modifier: M
 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
-fun AppDrawerContent(viewModel: LauncherViewModel, settings: LauncherSettings, iconOverrides: Map<String, android.graphics.drawable.Drawable?> = emptyMap(), onClose: () -> Unit) {
+fun AppDrawerContent(viewModel: LauncherViewModel, iconPackHelper: IconPackHelper, settings: LauncherSettings, onClose: () -> Unit) {
 Surface(modifier = Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background.copy(alpha = 0.97f)) {
 Column(Modifier.fillMaxSize().statusBarsPadding()) {
-if (settings.showSearchBar) {
-OutlinedTextField(value = viewModel.searchQuery, onValueChange = { viewModel.searchQuery = it },
-modifier = Modifier.fillMaxWidth().padding(16.dp), placeholder = { Text("Search apps…") },
-leadingIcon = { Icon(Icons.Default.Search, null) },
-trailingIcon = { if (viewModel.searchQuery.isNotEmpty()) IconButton(onClick = { viewModel.searchQuery = "" }) { Icon(Icons.Default.Close, null) } },
-singleLine = true, shape = RoundedCornerShape(16.dp),
-colors = OutlinedTextFieldDefaults.colors(focusedBorderColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.5f), unfocusedBorderColor = MaterialTheme.colorScheme.surfaceVariant))
-}
-val apps = viewModel.filteredApps
-Column(Modifier.fillMaxSize().padding(horizontal = 12.dp)) {
-val rows = apps.chunked(settings.gridColumns)
-rows.forEach { row ->
-Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly) {
-row.forEach { app -> AppDrawerItem(app, viewModel, onClose, Modifier.weight(1f), settings, iconOverrides) }
-repeat(settings.gridColumns - row.size) { Spacer(Modifier.weight(1f)) }
-}
-Spacer(Modifier.height(8.dp))
-}
-}
-}
-}
+            if (settings.showSearchBar) {
+                OutlinedTextField(value = viewModel.searchQuery, onValueChange = { viewModel.searchQuery = it },
+                    modifier = Modifier.fillMaxWidth().padding(16.dp), placeholder = { Text("Search apps…") },
+                    leadingIcon = { Icon(Icons.Default.Search, null) },
+                    trailingIcon = { if (viewModel.searchQuery.isNotEmpty()) IconButton(onClick = { viewModel.searchQuery = "" }) { Icon(Icons.Default.Close, null) } },
+                    singleLine = true, shape = RoundedCornerShape(16.dp),
+                    colors = OutlinedTextFieldDefaults.colors(focusedBorderColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.5f), unfocusedBorderColor = MaterialTheme.colorScheme.surfaceVariant))
+            }
+            val apps = viewModel.filteredApps
+            Column(Modifier.fillMaxSize().padding(horizontal = 12.dp)) {
+                val rows = apps.chunked(settings.gridColumns)
+                rows.forEach { row ->
+                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly) {
+                        row.forEach { app -> AppDrawerItem(app, viewModel, iconPackHelper, onClose, Modifier.weight(1f), settings) }
+                        repeat(settings.gridColumns - row.size) { Spacer(Modifier.weight(1f)) }
+                    }
+                    Spacer(Modifier.height(8.dp))
+                }
+            }
+        }
+    }
 }
 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
-fun AppDrawerItem(app: AppInfo, viewModel: LauncherViewModel, onClose: () -> Unit, modifier: Modifier = Modifier, settings: LauncherSettings, iconOverrides: Map<String, android.graphics.drawable.Drawable?> = emptyMap()) {
+fun AppDrawerItem(app: AppInfo, viewModel: LauncherViewModel, iconPackHelper: IconPackHelper, onClose: () -> Unit, modifier: Modifier = Modifier, settings: LauncherSettings) {
 var showMenu by remember { mutableStateOf(false) }
-val displayIcon = iconOverrides[app.packageName] ?: app.icon
-    Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = modifier.combinedClickable(
-        onClick = { viewModel.launchApp(app.packageName); onClose() },
-        onLongClick = { showMenu = true }
-    )) {
-        val bitmap = displayIcon?.toBitmap(56, 56)?.asImageBitmap()
+Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = modifier.combinedClickable(
+onClick = { viewModel.launchApp(app.packageName); onClose() },
+onLongClick = { showMenu = true }
+)) {
+val icon = remember(app.packageName, settings.iconPackPackage) {
+val pack = settings.iconPackPackage
+if (pack.isNotBlank()) {
+val packIcon = iconPackHelper.getIconFromPack(pack, app.packageName)
+if (packIcon != null) packIcon else app.icon
+} else {
+app.icon
+}
+}
+val bitmap = try {
+if (icon is android.graphics.drawable.Drawable) (icon as android.graphics.drawable.Drawable).toBitmap(56, 56)?.asImageBitmap()
+else app.icon?.toBitmap(56, 56)?.asImageBitmap()
+} catch (_: Exception) { null }
         Box {
             if (bitmap != null) Image(bitmap = bitmap, contentDescription = app.appName, modifier = Modifier.size(52.dp).clip(RoundedCornerShape(12.dp)))
             else Icon(Icons.Default.Android, null, Modifier.size(52.dp))

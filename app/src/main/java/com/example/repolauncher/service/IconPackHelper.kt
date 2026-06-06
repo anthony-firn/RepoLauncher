@@ -15,14 +15,16 @@ import org.xmlpull.v1.XmlPullParser
 import org.xmlpull.v1.XmlPullParserException
 import org.xmlpull.v1.XmlPullParserFactory
 import java.io.IOException
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 
 /**
- * Helper to detect installed icon packs and resolve app icons from them.
+ * Helper for icon pack support.
  *
- * Works just like Lawnchair:
- * 1. Detects icon packs via known intent actions and meta-data checks.
- * 2. Resolves icons by parsing the pack's "appfilter.xml" (the standard way)
- *    and falls back to "icon_{package}" / "component_{package}_{activity}" naming.
+ * Pattern copied from Lawnchair:
+ * - Load appfilter.xml ONCE on Dispatchers.IO → build componentMap
+ * - getIcon() = componentMap[ComponentName] — instant map lookup
+ * - XML never parsed on main thread
  */
 class IconPackHelper(private val context: Context) {
 
@@ -38,62 +40,106 @@ class IconPackHelper(private val context: Context) {
         "launcher.intent.action.ICON_PACK"
     )
 
-    /** Get list of installed icon packs on device */
-    fun getInstalledIconPacks(): List<IconPackInfo> {
-        val pm = context.packageManager
-        val packs = mutableMapOf<String, String>() // packageName -> displayName
+    // ── Icon pack data (loaded async, off main thread) ──
 
-        try {
-            for (intentAction in iconPackIntents) {
-                val intent = Intent(intentAction)
-                val resolveInfos = pm.queryIntentActivities(intent, PackageManager.GET_META_DATA)
-                for (info in resolveInfos) {
+    /** Parsed icon map: ComponentName → drawable name (from appfilter.xml) */
+    private var _iconMap: Map<String, String>? = null // packPackage_drawableName → drawableName cache
+    private var _componentMap: Map<ComponentName, String>? = null
+    private var _loadedPackage: String? = null
+
+    /**
+     * Load icon pack data ONCE off the main thread (like Lawnchair's loadInternal).
+     * Call this via LaunchedEffect + withContext(Dispatchers.IO).
+     * After this, getIconFromPack() is just a map lookup.
+     */
+    suspend fun loadForPackage(packPackage: String) {
+        if (packPackage.isEmpty()) {
+            _componentMap = emptyMap()
+            _loadedPackage = packPackage
+            return
+        }
+        if (_loadedPackage == packPackage && _componentMap != null) return // already loaded
+
+        withContext(Dispatchers.IO) {
+            try {
+                val packResources = context.packageManager.getResourcesForApplication(packPackage)
+                val componentMap = mutableMapOf<ComponentName, String>()
+
+                // Parse appfilter.xml ONCE — like Lawnchair's CustomIconPack.loadInternal()
+                val parser = getXmlParser(packResources, packPackage)
+                if (parser != null) {
                     try {
-                        val pkg = info.activityInfo.packageName
-                        val label = info.activityInfo.applicationInfo?.loadLabel(pm)?.toString() ?: pkg
-                        if (pkg !in packs) packs[pkg] = label
+                        val compStart = "ComponentInfo{"
+                        val compStartLength = compStart.length
+                        val compEnd = "}"
+                        val compEndLength = compEnd.length
+
+                        while (parser.next() != XmlPullParser.END_DOCUMENT) {
+                            if (parser.eventType != XmlPullParser.START_TAG) continue
+                            if (parser.name != "item") continue
+
+                            var component = parser.getAttributeValue(null, "component") ?: continue
+                            val drawableName = parser.getAttributeValue(null, "drawable") ?: continue
+
+                            // Strip ComponentInfo{...} wrappers (same as Lawnchair)
+                            if (component.startsWith(compStart) && component.endsWith(compEnd)) {
+                                component = component.substring(compStartLength, component.length - compEndLength)
+                            }
+
+                            val parsed = ComponentName.unflattenFromString(component)
+                            if (parsed != null) {
+                                componentMap[parsed] = drawableName
+                            }
+                        }
                     } catch (_: Exception) {}
                 }
-            }
-        } catch (_: Exception) {}
 
-        // Also scan all installed apps for icon pack meta-data
-        try {
-            val allApps = pm.getInstalledApplications(PackageManager.GET_META_DATA)
-            for (app in allApps) {
-                try {
-                    val ai = app
-                    val meta = ai.metaData ?: continue
-                    if (meta.containsKey("launcher.theme.KEY") ||
-                        meta.containsKey("org.adw.launcher.THEME_ICONS") ||
-                        meta.containsKey("launcher.theme.ICON") ||
-                        meta.containsKey("launcher.iconpack")
-                    ) {
-                        val label = ai.loadLabel(pm)?.toString() ?: ai.packageName
-                        if (ai.packageName !in packs) packs[ai.packageName] = label
-                    }
-                } catch (_: Exception) {}
+                _componentMap = componentMap
+                _loadedPackage = packPackage
+            } catch (_: Exception) {
+                _componentMap = emptyMap()
+                _loadedPackage = packPackage
             }
-        } catch (_: Exception) {}
-
-        return packs.map { (pkg, label) -> IconPackInfo(pkg, label) }
+        }
     }
 
     /**
-     * Try to get an icon from the icon pack for a given package.
-     * Returns null if not found, in which case the system icon should be used.
+     * Get icon from the pre-loaded map. Instant lookup — no XML parsing.
+     * Returns null if not found (use system icon).
      */
     fun getIconFromPack(packPackage: String, appPackage: String, activityName: String? = null): Drawable? {
+        if (packPackage.isEmpty() || _componentMap == null || _loadedPackage != packPackage) return null
+
+        // Build ComponentName variants to match
+        val cn = if (activityName != null) {
+            ComponentName(appPackage, activityName)
+        } else {
+            ComponentName(appPackage, ".")
+        }
+
+        // Direct match by ComponentName
+        val drawableName = _componentMap!![cn] ?: _componentMap!!.entries.find { entry ->
+            entry.key.packageName == appPackage && (activityName == null || entry.key.className == activityName)
+        }?.value
+
+        if (drawableName != null) {
+            try {
+                val packResources = context.packageManager.getResourcesForApplication(packPackage)
+                val id = packResources.getIdentifier(drawableName, "drawable", packPackage)
+                if (id != 0) {
+                    return packResources.getDrawable(id, null)
+                }
+            } catch (_: Exception) {}
+        }
+
+        // Fallback: try named strategies (icon_{package}, component_{package}_{activity})
         try {
-            val pm = context.packageManager
-            val packResources = pm.getResourcesForApplication(packPackage)
+            val packResources = context.packageManager.getResourcesForApplication(packPackage)
 
-            // Strategy 1: Parse appfilter.xml (standard Lawnchair / Nova / ADW method)
-            val parsed = parseAppfilterXml(packResources, packPackage, appPackage, activityName)
-            if (parsed != null) return parsed
-
-            // Strategy 2: Try "icon_{package}" (used by Arcticons and many packs)
-            val iconResId = packResources.getIdentifier("icon_${appPackage.replace('.', '_')}", "drawable", packPackage)
+            // Try "icon_{package}" (Arcticons style)
+            val iconResId = packResources.getIdentifier(
+                "icon_${appPackage.replace('.', '_')}", "drawable", packPackage
+            )
             if (iconResId != 0) {
                 try {
                     val drawable = packResources.getDrawable(iconResId, null)
@@ -101,7 +147,7 @@ class IconPackHelper(private val context: Context) {
                 } catch (_: Exception) {}
             }
 
-            // Strategy 3: Try "component_{package}_{activity}" if we have the activity name
+            // Try "component_{package}_{activity}"
             if (activityName != null) {
                 val compResId = packResources.getIdentifier(
                     "component_${appPackage.replace('.', '_')}_${activityName.replace('.', '_')}",
@@ -115,9 +161,9 @@ class IconPackHelper(private val context: Context) {
                 }
             }
 
-            // Strategy 4: Check meta-data for component mapping
+            // Check meta-data for component mapping
             try {
-                val packPm = pm.getPackageInfo(packPackage, PackageManager.GET_META_DATA)
+                val packPm = context.packageManager.getPackageInfo(packPackage, PackageManager.GET_META_DATA)
                 val meta = packPm.applicationInfo?.metaData
                 if (meta != null) {
                     val mappedResource = meta.getString(appPackage)
@@ -134,74 +180,65 @@ class IconPackHelper(private val context: Context) {
         return null
     }
 
-    /**
-     * Parse the icon pack's "appfilter.xml" to find a matching drawable.
-     * This is the standard approach used by Lawnchair, Nova, ADW, etc.
-     *
-     * appfilter.xml format:
-     *   <item component="ComponentInfo{package/activity}" drawable="drawable_name"/>
-     */
-    private fun parseAppfilterXml(
-        packResources: Resources,
-        packPackage: String,
-        appPackage: String,
-        activityName: String?
-    ): Drawable? {
-        val parser = getXmlParser(packResources, packPackage) ?: return null
-        try {
-            while (parser.next() != XmlPullParser.END_DOCUMENT) {
-                if (parser.eventType != XmlPullParser.START_TAG) continue
-                if (parser.name != "item") continue
-
-                val component = parser.getAttributeValue(null, "component") ?: continue
-                val drawableName = parser.getAttributeValue(null, "drawable") ?: continue
-
-                // ComponentInfo{package/activity}
-                val compStart = "ComponentInfo{"
-                val compEnd = "}"
-                var compStr = component
-                if (component.startsWith(compStart) && component.endsWith(compEnd)) {
-                    compStr = component.substring(compStart.length, component.length - compEnd.length)
-                }
-
-                // Check if this component matches our app
-                val slashIdx = compStr.indexOf('/')
-                val compPackage = if (slashIdx > 0) compStr.substring(0, slashIdx) else ""
-
-                if (compPackage == appPackage) {
-                    @Suppress("DEPRECATION")
-                    val id = packResources.getIdentifier(drawableName, "drawable", packPackage)
-                    if (id != 0) {
-                        try {
-                            return packResources.getDrawable(id, null)
-                        } catch (_: Exception) {}
-                    }
-                }
-
-                // Also try by fully qualified component name
-                if (activityName != null) {
-                    val parsed = ComponentName.unflattenFromString(compStr)
-                    if (parsed != null && parsed.packageName == appPackage) {
-                        @Suppress("DEPRECATION")
-                        val id = packResources.getIdentifier(drawableName, "drawable", packPackage)
-                        if (id != 0) {
-                            try {
-                                return packResources.getDrawable(id, null)
-                            } catch (_: Exception) {}
-                        }
-                    }
-                }
+    /** Parse all icons into a Map<String, Drawable?> — one-time batch for Compose */
+    suspend fun resolveAllIcons(packPackage: String, appList: List<Pair<String, String?>>): Map<String, Drawable?> {
+        if (packPackage.isEmpty()) return emptyMap()
+        loadForPackage(packPackage)
+        return withContext(Dispatchers.IO) {
+            val result = mutableMapOf<String, Drawable?>()
+            for ((pkg, activity) in appList) {
+                result["$pkg|$activity"] = getIconFromPack(packPackage, pkg, activity)
             }
-        } catch (_: XmlPullParserException) {}
-        catch (_: IOException) {}
-        catch (_: Exception) {}
-
-        return null
+            result
+        }
     }
 
-    /** Get an XmlPullParser for appfilter.xml from the icon pack */
+    // ── Install detection ──
+
+    /** Get list of installed icon packs on device */
+    fun getInstalledIconPacks(): List<IconPackInfo> {
+        val pm = context.packageManager
+        val packs = mutableMapOf<String, String>()
+
+        try {
+            for (intentAction in iconPackIntents) {
+                val intent = Intent(intentAction)
+                val resolveInfos = pm.queryIntentActivities(intent, PackageManager.GET_META_DATA)
+                for (info in resolveInfos) {
+                    try {
+                        val pkg = info.activityInfo.packageName
+                        val label = info.activityInfo.applicationInfo?.loadLabel(pm)?.toString() ?: pkg
+                        if (pkg !in packs) packs[pkg] = label
+                    } catch (_: Exception) {}
+                }
+            }
+        } catch (_: Exception) {}
+
+        // Scan for meta-data
+        try {
+            val allApps = pm.getInstalledApplications(PackageManager.GET_META_DATA)
+            for (app in allApps) {
+                try {
+                    val meta = app.metaData ?: continue
+                    if (meta.containsKey("launcher.theme.KEY") ||
+                        meta.containsKey("org.adw.launcher.THEME_ICONS") ||
+                        meta.containsKey("launcher.theme.ICON") ||
+                        meta.containsKey("launcher.iconpack")
+                    ) {
+                        val label = app.loadLabel(pm)?.toString() ?: app.packageName
+                        if (app.packageName !in packs) packs[app.packageName] = label
+                    }
+                } catch (_: Exception) {}
+            }
+        } catch (_: Exception) {}
+
+        return packs.map { (pkg, label) -> IconPackInfo(pkg, label) }
+    }
+
+    // ── XML parser (same as Lawnchair's getXml) ──
+
     private fun getXmlParser(packResources: Resources, packPackage: String): XmlPullParser? {
-        // Try resource xml/appfilter.xml
+        // Try xml/appfilter.xml
         try {
             val resId = packResources.getIdentifier("appfilter", "xml", packPackage)
             if (resId != 0) {
@@ -220,12 +257,13 @@ class IconPackHelper(private val context: Context) {
         return null
     }
 
+    // ── Utility ──
+
     /** Convert any Drawable to Bitmap for consistent display */
     fun drawableToBitmap(drawable: Drawable, size: Int = 56): Bitmap {
         return when (drawable) {
             is BitmapDrawable -> {
-                val bmp = drawable.bitmap
-                Bitmap.createScaledBitmap(bmp, size, size, true)
+                Bitmap.createScaledBitmap(drawable.bitmap, size, size, true)
             }
             is AdaptiveIconDrawable -> {
                 val bitmap = Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888)
@@ -242,49 +280,6 @@ class IconPackHelper(private val context: Context) {
                 bitmap
             }
         }
-    }
-
-    /**
-     * Parse appfilter.xml ONE time, build map of all package -> drawable.
-     * Safe for many apps — no repeated XML parsing.
-     */
-    fun resolveAllIcons(packPackage: String): Map<String, Drawable?> {
-        try {
-            val pm = context.packageManager
-            val packResources = pm.getResourcesForApplication(packPackage)
-            val parser = getXmlParser(packResources, packPackage) ?: return emptyMap()
-            val drawableNames = mutableMapOf<String, String>() // appPackage -> drawableName
-
-            parser.next() // move to first tag
-            var eventType = parser.eventType
-            while (eventType != XmlPullParser.END_DOCUMENT) {
-                if (eventType == XmlPullParser.START_TAG && parser.name == "item") {
-                    val component = parser.getAttributeValue(null, "component") ?: ""
-                    val drawableName = parser.getAttributeValue(null, "drawable") ?: ""
-
-                    var compStr = component
-                    if (compStr.startsWith("ComponentInfo{") && compStr.endsWith("}")) {
-                        compStr = compStr.substring(14, compStr.length - 1)
-                    }
-                    val slashIdx = compStr.indexOf('/')
-                    val appPkg = if (slashIdx > 0) compStr.substring(0, slashIdx) else ""
-                    if (appPkg.isNotBlank() && drawableName.isNotBlank()) {
-                        drawableNames[appPkg] = drawableName
-                    }
-                }
-                eventType = parser.next()
-            }
-
-            val result = mutableMapOf<String, Drawable?>()
-            for ((appPkg, drawableName) in drawableNames) {
-                try {
-                    @Suppress("DEPRECATION")
-                    val id = packResources.getIdentifier(drawableName, "drawable", packPackage)
-                    if (id != 0) result[appPkg] = packResources.getDrawable(id, null)
-                } catch (_: Exception) {}
-            }
-            return result
-        } catch (_: Exception) { return emptyMap() }
     }
 
     companion object {
